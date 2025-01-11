@@ -4,7 +4,7 @@ import pandas as pd
 from enum import Enum
 from pydantic import BaseModel
 from unittest.mock import patch, MagicMock
-from llm_classifier.classifier import parse_llm_json_response, classify_text, classify_all, process_csv, TemplateError
+from classifier import parse_llm_json_response, classify_text, classify_all, process_csv, TemplateError
 
 
 # Test enums
@@ -81,7 +81,7 @@ async def test_classify_text():
         }]
     }
     
-    with patch('llm_classifier.classifier.acompletion', return_value=mock_response):
+    with patch('classifier.acompletion', return_value=mock_response):
         result = await classify_text("test prompt", TestResponse)
         assert result.reason == "test reason"
         assert result.classification == "thing"
@@ -92,7 +92,7 @@ async def test_classify_all(sample_df):
     """Test the classify_all function"""
     mock_response = TestResponse(reason="test reason", classification="person")
     
-    with patch('llm_classifier.classifier.classify_text', return_value=mock_response):
+    with patch('classifier.classify_text', return_value=mock_response):
         prompt_template = "Classify {item} in {category}"
         results = await classify_all(sample_df, prompt_template, TestResponse)
         assert len(results) == 1
@@ -130,7 +130,7 @@ def test_process_csv(test_files):
     async def mock_classify_all(*args, **kwargs):
         return mock_responses
     
-    with patch('llm_classifier.classifier.classify_all', side_effect=mock_classify_all):
+    with patch('classifier.classify_all', side_effect=mock_classify_all):
         prompt_template = "Classify {item} in {category}"
         process_csv(input_file, output_file, prompt_template, TestResponse)
         
@@ -162,7 +162,7 @@ def test_process_csv_preserves_existing(test_files):
     async def mock_classify_all(*args, **kwargs):
         return mock_responses
     
-    with patch('llm_classifier.classifier.classify_all', side_effect=mock_classify_all):
+    with patch('classifier.classify_all', side_effect=mock_classify_all):
         prompt_template = "Classify {item}"
         process_csv(input_file, output_file, prompt_template, TestResponse)
         
@@ -213,7 +213,7 @@ def test_process_csv_with_nested_model(test_files):
     async def mock_classify_all(*args, **kwargs):
         return mock_responses
     
-    with patch('llm_classifier.classifier.classify_all', side_effect=mock_classify_all):
+    with patch('classifier.classify_all', side_effect=mock_classify_all):
         prompt_template = "Classify {item}"
         process_csv(input_file, output_file, prompt_template, NestedClassificationResponse)
         

@@ -1,7 +1,7 @@
 import pytest
 import pandas as pd
 from pydantic import BaseModel
-from llm_classifier.classifier import (
+from classifier import (
     extract_json_from_markdown,
     get_format_args,
     prepare_dataframe,
