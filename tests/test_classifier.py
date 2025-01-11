@@ -1,9 +1,37 @@
 import pytest
 import asyncio
 import pandas as pd
+from enum import Enum
 from pydantic import BaseModel
 from unittest.mock import patch, MagicMock
 from llm_classifier.classifier import parse_llm_json_response, classify_text, classify_all, process_csv, TemplateError
+
+
+# Test enums
+class PrimaryClassification(str, Enum):
+    TYPE_A = "type_a"
+    TYPE_B = "type_b"
+
+class ConfidenceLevel(str, Enum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+class ProjectType(str, Enum):
+    X = "x"
+    Y = "y"
+    Z = "z"
+
+# Test nested model
+class ClassificationDetails(BaseModel):
+    primary: PrimaryClassification
+    confidence: ConfidenceLevel
+    project_type: ProjectType
+
+class NestedClassificationResponse(BaseModel):
+    classification: ClassificationDetails
+    justification: str
+    evidence: str
 
 
 class TestResponse(BaseModel):
@@ -144,3 +172,66 @@ def test_process_csv_preserves_existing(test_files):
         assert result_df['classification'].tolist() == ['person', 'thing', 'place']
         assert result_df.loc[0, 'reason'] == 'some reason'  # Original reason should be preserved
         assert result_df.loc[2, 'reason'] == 'new reason 2'  # New reason should be applied 
+
+
+def test_process_csv_with_nested_model(test_files):
+    """Test that process_csv correctly flattens nested model fields into columns"""
+    input_file, output_file = test_files
+    
+    # Create test data
+    df = pd.DataFrame({
+        'item': ['test item 1', 'test item 2'],
+        'primary': ['', ''],
+        'confidence': ['', ''],
+        'project_type': ['', ''],
+        'justification': ['', ''],
+        'evidence': ['', '']
+    })
+    df.to_csv(input_file, index=False)
+    
+    mock_responses = [
+        NestedClassificationResponse(
+            classification=ClassificationDetails(
+                primary=PrimaryClassification.TYPE_A,
+                confidence=ConfidenceLevel.HIGH,
+                project_type=ProjectType.X
+            ),
+            justification="test justification 1",
+            evidence="test evidence 1"
+        ),
+        NestedClassificationResponse(
+            classification=ClassificationDetails(
+                primary=PrimaryClassification.TYPE_B,
+                confidence=ConfidenceLevel.MEDIUM,
+                project_type=ProjectType.Y
+            ),
+            justification="test justification 2",
+            evidence="test evidence 2"
+        )
+    ]
+    
+    async def mock_classify_all(*args, **kwargs):
+        return mock_responses
+    
+    with patch('llm_classifier.classifier.classify_all', side_effect=mock_classify_all):
+        prompt_template = "Classify {item}"
+        process_csv(input_file, output_file, prompt_template, NestedClassificationResponse)
+        
+        # Verify the output
+        result_df = pd.read_csv(output_file)
+        assert len(result_df) == 2
+        
+        # Check that nested fields are flattened
+        assert 'primary' in result_df.columns
+        assert 'confidence' in result_df.columns
+        assert 'project_type' in result_df.columns
+        assert 'justification' in result_df.columns
+        assert 'evidence' in result_df.columns
+        assert 'classification' not in result_df.columns
+        
+        # Verify values
+        assert result_df.loc[0, 'primary'] == PrimaryClassification.TYPE_A.value
+        assert result_df.loc[0, 'confidence'] == ConfidenceLevel.HIGH.value
+        assert result_df.loc[0, 'project_type'] == ProjectType.X.value
+        assert result_df.loc[0, 'justification'] == "test justification 1"
+        assert result_df.loc[0, 'evidence'] == "test evidence 1" 

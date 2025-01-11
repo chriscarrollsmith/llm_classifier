@@ -9,6 +9,7 @@ import asyncio
 import nest_asyncio
 import re
 from tenacity import retry, stop_after_attempt, wait_exponential
+from enum import Enum
 
 dotenv.load_dotenv()
 nest_asyncio.apply()
@@ -98,10 +99,12 @@ async def classify_all(df: pd.DataFrame, prompt_template: str, model_class: Type
 
 
 def prepare_dataframe(df: pd.DataFrame, model_fields: List[str]) -> pd.DataFrame:
-    """Prepare DataFrame by ensuring all required columns exist."""
+    """Prepare DataFrame by ensuring all required columns exist with string dtype."""
     for field in model_fields:
         if field not in df.columns:
             df[field] = ''
+        # Ensure all fields are string type
+        df[field] = df[field].astype(str).replace('nan', '')
     return df
 
 
@@ -109,9 +112,32 @@ def get_empty_mask(df: pd.DataFrame, model_fields: List[str]) -> pd.Series:
     """Create a mask for rows that need classification."""
     mask = pd.Series(False, index=df.index)
     for field in model_fields:
-        field_mask = df[field].isna() | (df[field] == '') | (df[field].str.lower() == 'na')
+        # Handle NaN values first
+        field_mask = df[field].isna()
+        
+        # Handle empty strings and 'NA' strings for non-NaN values
+        non_nan_mask = ~df[field].isna()
+        if non_nan_mask.any():
+            str_values = df.loc[non_nan_mask, field].astype(str)
+            empty_str_mask = pd.Series(False, index=df.index)
+            str_mask = (str_values == '') | (str_values.str.lower() == 'na')
+            empty_str_mask.loc[non_nan_mask] = str_mask.astype(bool)
+            field_mask = field_mask | empty_str_mask
+        
         mask = mask | field_mask
     return mask
+
+
+def flatten_model_dict(model_dict: Dict) -> Dict:
+    """Recursively flatten a nested dictionary from a Pydantic model."""
+    flattened = {}
+    for key, value in model_dict.items():
+        if isinstance(value, dict):
+            nested = flatten_model_dict(value)
+            flattened.update(nested)
+        else:
+            flattened[key] = value
+    return flattened
 
 
 def update_classifications(df: pd.DataFrame, results: List[T], mask: pd.Series, model_fields: List[str]) -> pd.DataFrame:
@@ -119,7 +145,7 @@ def update_classifications(df: pd.DataFrame, results: List[T], mask: pd.Series, 
     if not any(mask) or not results:  # No rows to update or no successful results
         return df
         
-    result_dicts = [result.model_dump() for result in results]
+    result_dicts = [flatten_model_dict(result.model_dump()) for result in results]
     result_df = pd.DataFrame(result_dicts)
     
     # Only update rows where we have results
@@ -127,16 +153,35 @@ def update_classifications(df: pd.DataFrame, results: List[T], mask: pd.Series, 
     result_df.index = successful_indices
     
     for field in model_fields:
-        df.loc[successful_indices, field] = result_df[field]
+        # Convert values to strings before assignment
+        if isinstance(result_df[field].iloc[0], Enum):
+            values = result_df[field].apply(lambda x: x.value)
+        else:
+            values = result_df[field].astype(str)
+        # Ensure the column is string type before assignment
+        df[field] = df[field].astype(str)
+        df.loc[successful_indices, field] = values
     
     return df
+
+
+def flatten_model_fields(model_class: Type[BaseModel]) -> List[str]:
+    """Recursively flatten Pydantic model fields to get leaf field names."""
+    fields = []
+    for field_name, field in model_class.model_fields.items():
+        if hasattr(field.annotation, 'model_fields'):  # If field is another Pydantic model
+            nested_fields = flatten_model_fields(field.annotation)
+            fields.extend(nested_fields)
+        else:
+            fields.append(field_name)
+    return fields
 
 
 def process_csv(input_file: str, output_file: str, prompt_template: str, model_class: Type[T]) -> None:
     """Process a CSV file, classifying empty rows and preserving existing classifications."""
     # Read and prepare the DataFrame
     df = pd.read_csv(input_file)
-    model_fields = list(model_class.model_fields.keys())
+    model_fields = flatten_model_fields(model_class)
     df = prepare_dataframe(df, model_fields)
     
     # Identify and process rows needing classification
