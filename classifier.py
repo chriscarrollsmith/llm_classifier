@@ -4,10 +4,11 @@ import dotenv
 import pandas as pd
 from litellm import acompletion
 from pydantic import BaseModel
-from typing import Type, TypeVar
+from typing import Type, TypeVar, List, Dict
 import asyncio
 import nest_asyncio
 import re
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 dotenv.load_dotenv()
 nest_asyncio.apply()
@@ -16,59 +17,139 @@ nest_asyncio.apply()
 T = TypeVar('T', bound=BaseModel)
 
 
+def extract_json_from_markdown(content: str) -> str:
+    """Extract JSON content from markdown code fence if present."""
+    if '```json' in content:
+        return content.split('```json')[1].split('```')[0].strip()
+    return content.strip().strip('"\'')
+
+
 def parse_llm_json_response(content: str, model_class: Type[T]) -> T:
     """Parse JSON from LLM response, handling both direct JSON and markdown-fenced output."""
     try:
-        # First try parsing as direct JSON
         return model_class.model_validate(json.loads(content))
     except json.JSONDecodeError:
-        # If that fails, check for markdown code fence
-        if '```json' in content:
-            # Extract content between ```json and ```
-            json_str = content.split('```json')[1].split('```')[0].strip()
-        else:
-            # Clean up the string by removing quotes and whitespace
-            json_str = content.strip().strip('"\'')
-        
+        json_str = extract_json_from_markdown(content)
         return model_class.model_validate(json.loads(json_str))
 
-# Updated to accept a model_class argument
-async def classify_text(prompt, model_class: Type[T]):
-    response = await acompletion(
-        model="deepseek/deepseek-chat", 
-        messages=[
-            {"role": "user", "content": prompt}
-        ],
-        format="json",
-        api_key=os.getenv('DEEPSEEK_API_KEY')
-    )
-    return parse_llm_json_response(response['choices'][0]['message']['content'], model_class)
 
-# Updated to accept a model_class argument
-def process_csv(input_file, output_file, prompt_template, model_class: Type[T]):
-    # Read the CSV file
-    df = pd.read_csv(input_file)
+def get_format_args(row: pd.Series, placeholders: List[str]) -> Dict[str, str]:
+    """Extract format arguments from a row based on placeholders."""
+    format_args = {}
+    for col in placeholders:
+        if col not in row:
+            raise TemplateError(f"Column '{col}' in prompt template not found in CSV file.")
+        format_args[col] = row.get(col, '')
+    return format_args
 
-    async def classify_all():
-        tasks = []
-        for _, row in df.iterrows():
-            # Construct the format arguments programmatically
-            placeholders = re.findall(r'\{(\w+)\}', prompt_template)
-            format_args = {}
-            for col in placeholders:
-                if col not in row:
-                    raise ValueError(f"Column '{col}' in prompt template not found in CSV file.")
-                format_args[col] = row.get(col, '')
+
+class ClassifierError(Exception):
+    """Base exception for classifier errors"""
+    pass
+
+
+class TemplateError(ClassifierError):
+    """Raised when there's an error with the prompt template"""
+    pass
+
+
+class APIError(ClassifierError):
+    """Raised when there's an error with the LLM API"""
+    pass
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+async def classify_text(prompt: str, model_class: Type[T]) -> T:
+    """Classify a single text using the LLM with retry logic."""
+    try:
+        response = await acompletion(
+            model="deepseek/deepseek-chat", 
+            messages=[{"role": "user", "content": prompt}],
+            format="json",
+            api_key=os.getenv('DEEPSEEK_API_KEY')
+        )
+        return parse_llm_json_response(response['choices'][0]['message']['content'], model_class)
+    except Exception as e:
+        print(f"Error during classification: {str(e)}")
+        raise APIError(f"API request failed: {str(e)}") from e
+
+
+async def classify_all(df: pd.DataFrame, prompt_template: str, model_class: Type[T]) -> List[T]:
+    """Classify all rows in a DataFrame."""
+    placeholders = re.findall(r'\{(\w+)\}', prompt_template)
+    results = []
+    
+    # Validate template placeholders before processing
+    format_args = get_format_args(df.iloc[0], placeholders)  # Will raise TemplateError if column missing
+    
+    for _, row in df.iterrows():
+        try:
+            format_args = get_format_args(row, placeholders)
             current_prompt = prompt_template.format(**format_args)
-            tasks.append(classify_text(current_prompt, model_class))
-        return await asyncio.gather(*tasks)
+            result = await classify_text(current_prompt, model_class)
+            results.append(result)
+        except APIError as e:
+            print(f"Failed to classify row {row.name}: {str(e)}")
+            results.append(None)
+        except TemplateError:
+            raise  # Template errors should stop processing
+    
+    return [r for r in results if r is not None]
 
-    # Apply the classification and expand the result into two columns
-    results = asyncio.run(classify_all())
-    df[['reason', 'classification']] = [pd.Series(result.model_dump()) for result in results]
 
-    # Write the updated DataFrame to a new CSV file
+def prepare_dataframe(df: pd.DataFrame, model_fields: List[str]) -> pd.DataFrame:
+    """Prepare DataFrame by ensuring all required columns exist."""
+    for field in model_fields:
+        if field not in df.columns:
+            df[field] = ''
+    return df
+
+
+def get_empty_mask(df: pd.DataFrame, model_fields: List[str]) -> pd.Series:
+    """Create a mask for rows that need classification."""
+    mask = pd.Series(False, index=df.index)
+    for field in model_fields:
+        field_mask = df[field].isna() | (df[field] == '') | (df[field].str.lower() == 'na')
+        mask = mask | field_mask
+    return mask
+
+
+def update_classifications(df: pd.DataFrame, results: List[T], mask: pd.Series, model_fields: List[str]) -> pd.DataFrame:
+    """Update DataFrame with new classifications."""
+    if not any(mask) or not results:  # No rows to update or no successful results
+        return df
+        
+    result_dicts = [result.model_dump() for result in results]
+    result_df = pd.DataFrame(result_dicts)
+    
+    # Only update rows where we have results
+    successful_indices = df[mask].index[:len(result_df)]
+    result_df.index = successful_indices
+    
+    for field in model_fields:
+        df.loc[successful_indices, field] = result_df[field]
+    
+    return df
+
+
+def process_csv(input_file: str, output_file: str, prompt_template: str, model_class: Type[T]) -> None:
+    """Process a CSV file, classifying empty rows and preserving existing classifications."""
+    # Read and prepare the DataFrame
+    df = pd.read_csv(input_file)
+    model_fields = list(model_class.model_fields.keys())
+    df = prepare_dataframe(df, model_fields)
+    
+    # Identify and process rows needing classification
+    mask = get_empty_mask(df, model_fields)
+    rows_to_classify = df[mask].copy()
+    
+    if not rows_to_classify.empty:
+        results = asyncio.run(classify_all(rows_to_classify, prompt_template, model_class))
+        df = update_classifications(df, results, mask, model_fields)
+    
+    # Write the updated DataFrame
     df.to_csv(output_file, index=False)
+
 
 if __name__ == "__main__":
     input_csv = "input.csv"
