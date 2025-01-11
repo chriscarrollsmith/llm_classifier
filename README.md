@@ -1,6 +1,6 @@
 # LLM Classifier
 
-This project classifies text data from a CSV file using a DeepSeek V3 in JSON mode (though LiteLLM makes it very easy to swap in a different LLM). DeepSeek V3 was chosen for its very low cost, very high throughput, and generous rate limiting.
+This project classifies text data from a CSV file using a DeepSeek V3 in JSON mode (though LiteLLM makes it very easy to swap in a different LLM). DeepSeek V3 was chosen for its very low cost, very high throughput, and highly permissive rate limiting.
 
 ## Prerequisites
 
@@ -30,7 +30,7 @@ Before you begin, make sure you have the following installed:
     uv sync
     ```
 
-3.  Create a `.env` file in the root directory and add your DeepSeek API key:
+3.  Create a `.env` file in the root directory and add your [DeepSeek API key](https://platform.deepseek.com/api_keys):
     ```
     DEEPSEEK_API_KEY=your_deepseek_api_key
     ```
