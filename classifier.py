@@ -197,30 +197,9 @@ def process_csv(input_file: str, output_file: str, prompt_template: str, model_c
 
 
 if __name__ == "__main__":
+    from prompt import prompt_template, ClassificationResponse
+    
     input_csv = "input.csv"
     output_csv = "output.csv"
-    
-    # Example of a prompt that uses the 'item' and 'category' columns
-    prompt_template = """
-    You are a helpful assistant that classifies items as "person", "place", or "thing".
-
-    Return a JSON object with the following fields:
-    - reason: a short explanation for the classification
-    - classification: "person", "place", or "thing"
-
-    Example output:
-    {{
-    "reason": "While Mickey Mouse is not technically a human being, he is a character or 'personality' created by Disney and most closely resembles the person category.",
-    "classification": "person"
-    }}
-
-    Item to classify:
-    {item}
-    """
-
-    # Define the response model
-    class ClassificationResponse(BaseModel):
-        reason: str
-        classification: str
     
     process_csv(input_csv, output_csv, prompt_template, ClassificationResponse)

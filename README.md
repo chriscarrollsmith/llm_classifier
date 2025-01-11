@@ -37,11 +37,13 @@ Before you begin, make sure you have the following installed:
 
 ## Usage
 
-1.  Prepare your input CSV file named `input.csv` and define your `prompt_template` and `ClassificationResponse` model at the bottom of `classifier.py`. Ensure that the column names in your CSV match the placeholders in `prompt_template`. For example, if your prompt uses `{item}`, your CSV should have a column named `item`.
+1.  Prepare your input CSV file named `input.csv` and define your `prompt_template` and `ClassificationResponse` model in `prompt.py`. Ensure that the column names in your CSV match the placeholders in `prompt_template`. For example, if your prompt uses `{item}`, your CSV should have a column named `item`.
+
+    Note: The classifier supports Pydantic models with nested structures (which will be flattened in the output CSV) and Enum fields. If your output CSV contains rows that already have complete observations, these rows will be preserved unchanged when using the output as input for another run. This allows you to process missed items by feeding the output CSV back in as input.
 
 2.  Run the `classifier.py` script:
     ```bash
     uv run python classifier.py
     ```
 
-    This script will read `input.csv`, classify each item using the LLM, and output the results to `output.csv`, including the classification and the reason for the classification.
+    This script will read `input.csv`, classify each item using the LLM, and output the results to `output.csv`.
