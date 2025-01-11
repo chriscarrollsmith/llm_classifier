@@ -60,7 +60,7 @@ class APIError(ClassifierError):
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-async def classify_text(prompt: str, model_class: Type[T]) -> T:
+async def classify_text(prompt: str, model_class: Type[T]) -> T | None:
     """Classify a single text using the LLM with retry logic."""
     try:
         response = await acompletion(
@@ -72,10 +72,10 @@ async def classify_text(prompt: str, model_class: Type[T]) -> T:
         return parse_llm_json_response(response['choices'][0]['message']['content'], model_class)
     except Exception as e:
         print(f"Error during classification: {str(e)}")
-        raise APIError(f"API request failed: {str(e)}") from e
+        return None
 
 
-async def classify_all(df: pd.DataFrame, prompt_template: str, model_class: Type[T]) -> List[T]:
+async def classify_all(df: pd.DataFrame, prompt_template: str, model_class: Type[T]) -> List[T | None]:
     """Classify all rows in a DataFrame."""
     placeholders = re.findall(r'\{(\w+)\}', prompt_template)
     results = []
@@ -89,13 +89,10 @@ async def classify_all(df: pd.DataFrame, prompt_template: str, model_class: Type
             current_prompt = prompt_template.format(**format_args)
             result = await classify_text(current_prompt, model_class)
             results.append(result)
-        except APIError as e:
-            print(f"Failed to classify row {row.name}: {str(e)}")
-            results.append(None)
         except TemplateError:
             raise  # Template errors should stop processing
     
-    return [r for r in results if r is not None]
+    return results  # Now includes None values for failed classifications
 
 
 def prepare_dataframe(df: pd.DataFrame, model_fields: List[str]) -> pd.DataFrame:
@@ -140,16 +137,23 @@ def flatten_model_dict(model_dict: Dict) -> Dict:
     return flattened
 
 
-def update_classifications(df: pd.DataFrame, results: List[T], mask: pd.Series, model_fields: List[str]) -> pd.DataFrame:
+def update_classifications(df: pd.DataFrame, results: List[T | None], mask: pd.Series, model_fields: List[str]) -> pd.DataFrame:
     """Update DataFrame with new classifications."""
-    if not any(mask) or not results:  # No rows to update or no successful results
+    if not any(mask) or not results:  # No rows to update or no results
         return df
-        
-    result_dicts = [flatten_model_dict(result.model_dump()) for result in results]
+    
+    # Filter out None results while keeping track of indices
+    valid_results = [(i, result) for i, result in enumerate(results) if result is not None]
+    if not valid_results:  # No valid results
+        return df
+    
+    indices, filtered_results = zip(*valid_results)
+    result_dicts = [flatten_model_dict(result.model_dump()) for result in filtered_results]
     result_df = pd.DataFrame(result_dicts)
     
-    # Only update rows where we have results
-    successful_indices = df[mask].index[:len(result_df)]
+    # Get the indices of rows that had successful classifications
+    mask_indices = df[mask].index
+    successful_indices = [mask_indices[i] for i in indices]
     result_df.index = successful_indices
     
     for field in model_fields:

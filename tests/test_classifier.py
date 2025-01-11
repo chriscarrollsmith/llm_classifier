@@ -235,3 +235,44 @@ def test_process_csv_with_nested_model(test_files):
         assert result_df.loc[0, 'project_type'] == ProjectType.X.value
         assert result_df.loc[0, 'justification'] == "test justification 1"
         assert result_df.loc[0, 'evidence'] == "test evidence 1" 
+
+
+def test_process_csv_with_validation_errors(test_files):
+    """Test that process_csv handles validation errors and saves partial results"""
+    input_file, output_file = test_files
+    
+    # Create test data
+    df = pd.DataFrame({
+        'item': ['item1', 'item2', 'item3'],
+        'reason': ['', '', ''],
+        'classification': ['', '', '']
+    })
+    df.to_csv(input_file, index=False)
+    
+    # Mock responses where second item causes validation error
+    async def mock_classify_all(*args, **kwargs):
+        return [
+            TestResponse(reason="reason1", classification="person"),
+            None,  # Simulates a failed classification
+            TestResponse(reason="reason3", classification="place")
+        ]
+    
+    with patch('classifier.classify_all', side_effect=mock_classify_all):
+        prompt_template = "Classify {item}"
+        process_csv(input_file, output_file, prompt_template, TestResponse)
+        
+        # Verify the output
+        result_df = pd.read_csv(output_file)
+        assert len(result_df) == 3
+        
+        # Check classifications - handle nan values
+        classifications = result_df['classification'].tolist()
+        assert classifications[0] == 'person'
+        assert pd.isna(classifications[1])  # Check for nan instead of empty string
+        assert classifications[2] == 'place'
+        
+        # Check reasons - handle nan values
+        reasons = result_df['reason'].tolist()
+        assert reasons[0] == 'reason1'
+        assert pd.isna(reasons[1])  # Check for nan instead of empty string
+        assert reasons[2] == 'reason3' 
