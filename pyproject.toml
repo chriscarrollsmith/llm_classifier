@@ -1,5 +1,5 @@
 [project]
-name = "llm-classifier"
+name = "csv-classifier"
 version = "0.1.0"
 description = "Classify text data from a CSV file with LLMs"
 readme = "README.md"

@@ -1,4 +1,4 @@
-# LLM Classifier
+# CSV Classifier
 
 This project classifies text data from a CSV file using a DeepSeek V3 in JSON mode (though LiteLLM makes it very easy to swap in a different LLM). DeepSeek V3 was chosen for its very low cost, very high throughput, and highly permissive rate limiting.
 
@@ -21,8 +21,8 @@ Before you begin, make sure you have the following installed:
 
 1.  Clone the repository:
     ```bash
-    git clone https://github.com/chriscarrollsmith/llm-classifier.git
-    cd llm-classifier
+    git clone https://github.com/chriscarrollsmith/csv-classifier.git
+    cd csv-classifier
     ```
 
 2.  Install the project dependencies using `uv`:
